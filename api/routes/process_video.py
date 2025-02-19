@@ -1,0 +1,156 @@
+from fastapi import APIRouter, Query, HTTPException
+from video_processor.process_transcripts import TranscripsFetcher
+from RAG_Pipeline.rag import RAGPipeline
+from database.db import TursoDB
+from utils.api_inputs import Video_Link_Input
+from uuid import uuid4
+import pandas as pd
+import requests
+from bs4 import BeautifulSoup 
+import logging
+import re
+
+router = APIRouter()
+
+tf = TranscripsFetcher()
+rag = RAGPipeline()
+tdb = TursoDB()
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
+
+async def get_video_id(url):
+    yt_pattern = r'(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:shorts\/|watch\?v=|embed\/)|youtu\.be\/)([^"&?\/\s]{11})'
+    match = re.search(yt_pattern, url)
+    return match.group(1) if match else None
+
+async def scrape_info(url): 
+    r = requests.get(url) 
+    s = BeautifulSoup(r.text, "html.parser") 
+    link = s.find_all(name="title")[0]
+    return link.text
+
+async def proccess_and_ingest_video(user_id, video_link, video_id, created_at):
+    """
+    Processes a video link, extracts transcripts, ingests data into Pinecone, 
+    and stores session details in Turso DB.
+    """
+    try:
+        logger.info(f"Processing video link: {video_link} for user: {user_id}")
+
+        # Fetch Transcripts
+        yt_data = await tf.process_link(video_link, 600, 'en')
+        yt_data['user_id'] = user_id
+        yt_data['video_name'] = await scrape_info(video_link)
+        
+        logger.info(f"Fetched transcript data for video ID {video_id}: {yt_data['video_name']}")
+
+        # Ingest into Pinecone
+        logger.info("Ingesting data into Pinecone...")
+        ingested_uuids = await rag.ingest_data(yt_data)
+        logger.info(f"Successfully ingested {len(ingested_uuids)} chunks into Pinecone")
+
+        # Generate session ID
+        session_id = uuid4()
+        logger.info(f"Generated session ID: {session_id} for user: {user_id}")
+
+        # Handle inverted commas in title and insert into Turso DB
+        await tdb.insert_user_session(user_id, str(session_id), created_at=created_at, video_id=video_id, video_name=yt_data['video_name'], video_link=video_link)
+        logger.info(f"Inserted session data into Turso DB for user {user_id} with session ID {session_id}")
+
+        return yt_data, ingested_uuids, session_id
+
+    except Exception as e:
+        logger.error(f"Error processing video {video_link}: {e}", exc_info=True)
+        return None, None, None
+    
+@router.api_route("/process_video/", methods=["GET"])
+async def process_video(
+    input: Video_Link_Input
+):
+    try:
+        logger.info("Processing video for user_id: %s and video_link: %s", input.user_id, input.video_link)
+        
+        # Check if video already exists in the database
+        try:
+            video_id = await get_video_id(input.video_link)
+            logger.info("Extracted video ID: %s", video_id)
+        except Exception as e:
+            logger.error("Failed to extract video ID: %s", str(e))
+            raise HTTPException(status_code=500, detail=f"Failed to extract video ID: {str(e)}")
+        
+        try:
+            video_list = await tdb.check_if_video_exists(video_id)
+            logger.info("Database query successful. Found %d records", len(video_list))
+        except Exception as e:
+            logger.error("Database query failed: %s", str(e))
+            raise HTTPException(status_code=500, detail=f"Database query failed: {str(e)}")
+
+        if video_list:
+            try:
+                video_df = pd.DataFrame(video_list, columns=['user_id', 'session_id', 'video_id', 'video_name'])
+                logger.info("Video list successfully processed into DataFrame")
+            except Exception as e:
+                logger.error("Failed to process video list: %s", str(e))
+                raise HTTPException(status_code=500, detail=f"Failed to process video list: {str(e)}")
+
+            if input.user_id in video_df['user_id'].values:
+                logger.info("Video already exists for user_id: %s", input.user_id)
+                return {
+                    "status": 200,
+                    "sub_status": 201,
+                    "session_id": video_df[video_df['user_id'] == input.user_id]['session_id'].values[0],
+                    "video_name": video_df[video_df['user_id'] == input.user_id]['video_name'].values[0]
+                }
+            else:
+                logger.info("Video already exists for another user")
+                try:
+                    session_id = uuid4()
+                    video_link = f"https://youtube.com/watch?v={video_id}"
+                    video_name = await scrape_info(video_link)
+                    
+                    if not video_name:
+                        logger.error("Failed to retrieve video name")
+                        raise ValueError("Failed to retrieve video name")
+                    
+                    await tdb.insert_user_session(
+                        input.user_id, 
+                        str(session_id), 
+                        created_at = input.created_at,
+                        video_id = video_id, 
+                        video_name=video_name,
+                        video_link = video_link
+                    )
+                    
+                    logger.info("Inserted new user session for user_id: %s", input.user_id)
+                    return {
+                        "status": 200,
+                        "sub_status": 202,
+                        "session_id": session_id,
+                        "video_name": video_name
+                    }
+                except Exception as e:
+                    logger.error("Error inserting session: %s", str(e))
+                    raise HTTPException(status_code=500, detail=f"Error inserting session: {str(e)}")
+
+        # If video does not exist, process and ingest
+        try:
+            yt_data, ingested_uuids, session_id = await proccess_and_ingest_video(input.user_id, input.video_link, video_id, input.created_at)
+            logger.info("Successfully processed and ingested video for user_id: %s", input.user_id)
+        except Exception as e:
+            logger.error("Error processing and ingesting video: %s", str(e))
+            raise HTTPException(status_code=500, detail=f"Error processing and ingesting video: {str(e)}")
+
+        return {
+            "status": 200,
+            "sub_status": 200,
+            "video_name": yt_data['video_name'],
+            "session_id": session_id
+        }
+    
+    except HTTPException as e:
+        logger.warning("HTTPException encountered: %s", e.detail)
+        raise e  # Pass FastAPI exceptions as is
+    except Exception as e:
+        logger.critical("Unexpected error: %s", str(e))
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
