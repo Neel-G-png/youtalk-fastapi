@@ -39,21 +39,24 @@ async def get_sessions(user_id: str = Query(..., description="User ID for fetchi
         raise HTTPException(status_code=500, detail=f"Failed to fetch user sessions: {str(e)}")
 
 @router.get("/get_chat_history/")
-async def get_chat_history(input: Chat_History):
-    logger.info(f"Fetching chat history for session_id: {input.session_id}")
+async def get_chat_history(
+    user_id: str = Query(..., description="User ID for fetching chat history"),
+    session_id: str = Query(..., description="Session ID for fetching chat history")
+):
+    logger.info(f"Fetching chat history for session_id: {session_id}")
     try:
-        chat_history = await tdb.get_user_chat_history(input.session_id)
+        chat_history = await tdb.get_user_chat_history(session_id)
         json_history = await format_session_history(chat_history)
-        logger.info(f"Successfully fetched chat history for session_id: {input.session_id}")
+        logger.info(f"Successfully fetched chat history for session_id: {session_id}")
         return {
             "status": 200,
             "chat_history": json_history
         }
     except Exception as e:
-        logger.error(f"Failed to fetch chat history for session_id: {input.session_id}. Error: {str(e)}")
+        logger.error(f"Failed to fetch chat history for session_id: {session_id}. Error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch chat history: {str(e)}")
     
-@router.post("/insert_messsage/")
+@router.post("/insert_message/")
 async def insert_message(
     input:Insert_Message_Input
 ):

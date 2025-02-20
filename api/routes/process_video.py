@@ -64,7 +64,7 @@ async def proccess_and_ingest_video(user_id, video_link, video_id, created_at):
         logger.error(f"Error processing video {video_link}: {e}", exc_info=True)
         return None, None, None
     
-@router.api_route("/process_video/", methods=["GET"])
+@router.post("/process_video/")
 async def process_video(
     input: Video_Link_Input
 ):
