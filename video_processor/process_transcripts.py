@@ -49,25 +49,12 @@ class TranscripsFetcher():
     async def extract_video_id(self, url):
         match = re.search(self.yt_pattern, url)
         return match.group(1) if match else None
-
-    def fetch_transcripts(self, video_id, language='en-IN'):
-        try:
-            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-            try:
-                transcript = transcript_list.find_transcript([language])
-            except:
-                transcript = transcript_list.find_transcript(['en-IN'])
-            if language != 'en':
-                return transcript.translate(language).fetch()
-            return transcript.fetch()
-        
-        except Exception as e:
-            print("Could not Extract Transcripts : ",e)
-            return None
     
     def fetch_transcripts(self, video_id, language='en'):
         try:
+            logger.info(f"Fetching List of Transcripts for video_id : {video_id}")
             transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+            logger.info(f"Successfully fetched List of Transcripts for video_id : {video_id}")
             try:
                 transcript = transcript_list.find_transcript(['en', 'en-IN', 'en-GB', 'en-US', 'en-AU', 'en-CA'])
             except Exception as e:
