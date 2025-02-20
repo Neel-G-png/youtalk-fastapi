@@ -1,6 +1,10 @@
 import re
+import logging
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api.formatters import Formatter
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
 class BatchFormatter(Formatter):
     def format_transcript(self, transcript, batch_size, **kwargs):
@@ -66,13 +70,20 @@ class TranscripsFetcher():
             transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
             try:
                 transcript = transcript_list.find_transcript(['en', 'en-IN', 'en-GB', 'en-US', 'en-AU', 'en-CA'])
-            except:
+            except Exception as e:
+                logger.error(f"Could not find transcript in English, trying other languages : {e}")
+                
                 transcript = transcript_list.find_transcript(["en","hi","de","ab","aa","af","ak","sq","am","ar","hy","as","ay","az","bn","ba","eu","be","bho","bs","br","bg","my","ca","ceb","zh-Hans","zh-Hant","co","hr","cs","da","dv","nl","dz","eo","et","ee","fo","fj","fil","fi","fr","gaa","gl","lg","ka","el","gn","gu","ht","ha","haw","iw","hmn","hu","is","ig","id","iu","ga","it","ja","jv","kl","kn","kk","kha","km","rw","ko","kri","ku","ky","lo","la","lv","ln","lt","lua","luo","lb","mk","mg","ms","ml","mt","gv","mi","mr","mn","mfe","ne","new","nso","no","ny","oc","or","om","os","pam","ps","fa","pl","pt","pt-PT","pa","qu","ro","rn","ru","sm","sg","sa","gd","sr","crs","sn","sd","si","sk","sl","so","st","es","su","sw","ss","sv","tg","ta","tt","te","th","bo","ti","to","ts","tn","tum","tr","tk","uk","ur","ug","uz","ve","vi","war","cy","fy","wo","xh","yi","yo","zu"])
+
+                logger.info(f"Transcript found in {transcript.language}")
+
+                logger.info(f"Translating transcripts to English!!")
                 transcript = transcript.translate('en')
+                logger.info(f"Successfully translated transcripts to English!!")
             return transcript.fetch()
         
         except Exception as e:
-            print("Could not Extract Transcripts : ",e)
+            print("Could not Extract Transcripts : ", e)
             return None
 
     async def process_link(self, video_link, batch_size = 300, language='en'):
