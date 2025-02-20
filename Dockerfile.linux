@@ -6,6 +6,7 @@ RUN groupadd -r appgroup && useradd -r -g appgroup appuser
 
 RUN apt-get update && apt-get install -y \
     curl \
+    tor \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 

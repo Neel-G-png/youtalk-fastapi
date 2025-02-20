@@ -51,9 +51,13 @@ class TranscripsFetcher():
         return match.group(1) if match else None
     
     def fetch_transcripts(self, video_id, language='en'):
+        PROXY = {
+            "http": "socks5h://127.0.0.1:9050",
+            "https": "socks5h://127.0.0.1:9050"
+        }
         try:
             logger.info(f"Fetching List of Transcripts for video_id : {video_id}")
-            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id, proxies=PROXY)
             logger.info(f"Successfully fetched List of Transcripts for video_id : {video_id}")
             try:
                 transcript = transcript_list.find_transcript(['en', 'en-IN', 'en-GB', 'en-US', 'en-AU', 'en-CA'])
