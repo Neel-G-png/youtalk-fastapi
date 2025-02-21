@@ -101,7 +101,7 @@ async def proccess_and_ingest_video(user_id, video_link, video_id, created_at):
 async def user_exceeds_session_limit(user_id):
     try:
         user_sessions = await tdb.get_session_count_for_user(user_id)
-        if len(user_sessions) >= SESSION_LIMIT:
+        if user_sessions >= SESSION_LIMIT:
             return True
         return False
     except Exception as e:
