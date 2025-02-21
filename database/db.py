@@ -45,6 +45,18 @@ class TursoDB():
         """
         chat_history = self.conn.execute(query, (session_id,)).fetchall()
         return chat_history
+    
+    async def get_session_count_for_user(self, user_id: str):
+        await self.refresh_connection_manually()
+        query = """
+            SELECT 
+                count(*) as sesstion_count
+            FROM sessions
+            WHERE user_id = ?
+            ORDER BY created_at ASC
+        """
+        session_count = self.conn.execute(query, (user_id,)).fetchall()
+        return session_count[0][0]
 
     async def insert_chat_message(self, session_id: str, role: str, msg: str, created_at: str):
         await self.refresh_connection_manually()

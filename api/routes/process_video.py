@@ -13,13 +13,13 @@ import os
 import json
 from dotenv import load_dotenv
 
-
 load_dotenv()
 router = APIRouter()
 
 tf = TranscripsFetcher()
 rag = RAGPipeline()
 tdb = TursoDB()
+SESSION_LIMIT = int(os.getenv("SESSION_LIMIT"))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -98,6 +98,16 @@ async def proccess_and_ingest_video(user_id, video_link, video_id, created_at):
         logger.error(f"Error processing video {video_link}: {e}", exc_info=True)
         return None, None, None
     
+async def user_exceeds_session_limit(user_id):
+    try:
+        user_sessions = await tdb.get_session_count_for_user(user_id)
+        if len(user_sessions) >= SESSION_LIMIT:
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"Error checking session limit for user {user_id}: {e}")
+        return True
+
 @router.post("/process_video/")
 async def process_video(
     input: Video_Link_Input
@@ -105,20 +115,23 @@ async def process_video(
     try:
         logger.info("Processing video for user_id: %s and video_link: %s", input.user_id, input.video_link)
         
+        if await user_exceeds_session_limit(input.user_id):
+            raise HTTPException(status_code=500, detail=f"Sorry, I'm on free tier and limiting users to only 3 videos")
+
         # Check if video already exists in the database
         try:
             video_id = await get_video_id(input.video_link)
             logger.info("Extracted video ID: %s", video_id)
         except Exception as e:
             logger.error("Failed to extract video ID: %s", str(e))
-            raise HTTPException(status_code=500, detail=f"Failed to extract video ID: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Failed to extract video ID: {input.video_link}")
         
         try:
             video_list = await tdb.check_if_video_exists(video_id)
             logger.info("Database query successful. Found %d records", len(video_list))
         except Exception as e:
             logger.error("Database query failed: %s", str(e))
-            raise HTTPException(status_code=500, detail=f"Database query failed: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Something went wrong!")
 
         if video_list:
             try:
@@ -126,7 +139,7 @@ async def process_video(
                 logger.info("Video list successfully processed into DataFrame")
             except Exception as e:
                 logger.error("Failed to process video list: %s", str(e))
-                raise HTTPException(status_code=500, detail=f"Failed to process video list: {str(e)}")
+                raise HTTPException(status_code=500, detail=f"Something went wrong processing video list")
 
             if input.user_id in video_df['user_id'].values:
                 logger.info("Video already exists for user_id: %s", input.user_id)
@@ -165,7 +178,7 @@ async def process_video(
                     }
                 except Exception as e:
                     logger.error("Error inserting session: %s", str(e))
-                    raise HTTPException(status_code=500, detail=f"Error inserting session: {str(e)}")
+                    raise HTTPException(status_code=500, detail=f"Couldn't create a new sessions!")
 
         # If video does not exist, process and ingest
         try:
@@ -173,7 +186,7 @@ async def process_video(
             logger.info("Successfully processed and ingested video for user_id: %s", input.user_id)
         except Exception as e:
             logger.error("Error processing and ingesting video: %s", str(e))
-            raise HTTPException(status_code=500, detail=f"Error processing and ingesting video: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error processing the video!")
 
         return {
             "status": 200,
@@ -187,4 +200,4 @@ async def process_video(
         raise e  # Pass FastAPI exceptions as is
     except Exception as e:
         logger.critical("Unexpected error: %s", str(e))
-        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Something went terribly wrong!")
