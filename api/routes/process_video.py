@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup
 import logging
 import re
 import os
+import json
 from dotenv import load_dotenv
 
 
@@ -38,9 +39,21 @@ async def scrape_info(url):
             'https': f'socks5h://{NORDVPN_USERNAME}:{NORDVPN_PASSWORD}@{server}'
         }
         r = requests.get(url, proxies=nvpn_proxy) 
-        s = BeautifulSoup(r.text, "html.parser") 
-        link = s.find_all(name="title")[0]
-        return link.text
+        soup = BeautifulSoup(r.text, "html.parser")
+        script_tag = soup.find("script", string=re.compile("ytInitialData"))
+        if script_tag:
+            json_text = re.search(r"var ytInitialData = ({.*?});", script_tag.string)
+            if json_text:
+                youtube_data = json.loads(json_text.group(1))
+                try:
+                    video_title = youtube_data["contents"]["twoColumnWatchNextResults"]["results"]["results"]["contents"][0]["videoPrimaryInfoRenderer"]["title"]["runs"][0]["text"]
+                    return video_title
+                except KeyError:
+                    logger.info("Could not extract video title.")
+            else:
+                logger.info("JSON data not found.")
+        else:
+            logger.info("Could not find ytInitialData script tag.")
     except Exception as e:
         logger.error(f"Failed to scrape video name for {url}: {e}")
         return None
@@ -56,7 +69,13 @@ async def proccess_and_ingest_video(user_id, video_link, video_id, created_at):
         # Fetch Transcripts
         yt_data = await tf.process_link(video_link, 600, 'en')
         yt_data['user_id'] = user_id
-        yt_data['video_name'] = await scrape_info(video_link)
+        video_title = await scrape_info(video_link)
+        
+        # Raise an error if title is empty or None
+        if not video_title:
+            raise ValueError(f"Failed to retrieve video title for link: {video_link}")
+
+        yt_data['video_name'] = video_title
         
         logger.info(f"Fetched transcript data for video ID {video_id}: {yt_data['video_name']}")
 
