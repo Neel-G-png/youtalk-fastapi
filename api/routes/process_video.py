@@ -9,7 +9,11 @@ import requests
 from bs4 import BeautifulSoup 
 import logging
 import re
+import os
+from dotenv import load_dotenv
 
+
+load_dotenv()
 router = APIRouter()
 
 tf = TranscripsFetcher()
@@ -25,10 +29,21 @@ async def get_video_id(url):
     return match.group(1) if match else None
 
 async def scrape_info(url): 
-    r = requests.get(url) 
-    s = BeautifulSoup(r.text, "html.parser") 
-    link = s.find_all(name="title")[0]
-    return link.text
+    try:
+        NORDVPN_USERNAME = os.getenv("NORDVPN_USERNAME")
+        NORDVPN_PASSWORD = os.getenv("NORDVPN_PASSWORD")
+        server = "atlanta.us.socks.nordhold.net:1080"
+        nvpn_proxy = {
+            'http': f'socks5h://{NORDVPN_USERNAME}:{NORDVPN_PASSWORD}@{server}',
+            'https': f'socks5h://{NORDVPN_USERNAME}:{NORDVPN_PASSWORD}@{server}'
+        }
+        r = requests.get(url, proxies=nvpn_proxy) 
+        s = BeautifulSoup(r.text, "html.parser") 
+        link = s.find_all(name="title")[0]
+        return link.text
+    except Exception as e:
+        logger.error(f"Failed to scrape video name for {url}: {e}")
+        return None
 
 async def proccess_and_ingest_video(user_id, video_link, video_id, created_at):
     """
