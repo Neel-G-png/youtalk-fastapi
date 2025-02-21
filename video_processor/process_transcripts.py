@@ -46,7 +46,7 @@ class BatchFormatter(Formatter):
     
 class TranscripsFetcher():
     def __init__(self):
-        self.yt_pattern = r'(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:shorts\/|watch\?v=|embed\/)|youtu\.be\/)([^"&?\/\s]{11})'
+        self.yt_pattern = r'(?:https?:\/\/)?(?:www\.|m\.)?(?:youtube\.com\/(?:shorts\/|watch\?v=|embed\/)|youtu\.be\/)([^"&?\/\s]{11})'
         self.formatter = BatchFormatter()
         self.proxy_servers = [
             "amsterdam.nl.socks.nordhold.net:1080",

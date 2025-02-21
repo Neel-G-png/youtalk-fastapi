@@ -132,22 +132,35 @@ class RAGPipeline():
 
     async def _build_rag_chain(self):
         template = """
-            Answer the user's question based **only** on the provided context. 
-            If the context does not contain enough information, Mention that the video context does not have an exact answer but build an answer based in the context below and try to answer the question as best as you can.
+        CONTEXT:
+        {context}
 
-            **Key Points:**  
-            - (Use bullet points for clarity, if needed)  
-            - (Highlight essential details in **bold**)  
-            - (Use `inline code` for specific terms if relevant)  
+        QUESTION:
+        {question}
 
-            ### Context:
-            {context}
-
-            ### Question:
-            {question}
-
-            ### Answer:
+        INSTRUCTIONS:
+        Answer the users QUESTION using the CONTEXT text above.
+        Keep your answer ground in the facts of the CONTEXT.
+        If the CONTEXT doesn’t contain the facts to answer the QUESTION return a message that the CONTEXT doesn’t have an exact answer but build an answer based on the provided CONTEXT and try to answer the QUESTION as best as you can.
         """
+
+        # template = """
+        #     Answer the user's question based **only** on the provided context. 
+        #     If the context does not contain enough information, Mention that the video context does not have an exact answer but build an answer based on the context below and try to answer the question as best as you can.
+
+        #     **Key Points:**  
+        #     - (Use bullet points for clarity, if needed)  
+        #     - (Highlight essential details in **bold**)  
+        #     - (Use `inline code` for specific terms if relevant)  
+
+        #     ### Context:
+        #     {context}
+
+        #     ### Question:
+        #     {question}
+
+        #     ### Answer:
+        # """
 
         prompt = ChatPromptTemplate.from_template(template)
         
@@ -159,17 +172,12 @@ class RAGPipeline():
 
     async def _build_followup_rag_chain(self):
         contextualize_system_template = """
-            You are an AI assistant that answers questions based on a conversation history and relevant video context. 
+            You are an AI assistant that **Generates a follow-up question** that builds on past responses, available chat history, and users latest question.
 
             ### Instructions:
-            1. **Reformulate the latest user question** into a self-contained query, incorporating details from chat history if necessary.
-            2. **Generate a follow-up answer** that builds on previous responses while maintaining coherence.
-            3. If the context does not contain enough information, Mention that the video context does not have an exact answer but build an answer based in the context below and try to answer the question as best as you can.
-
-            **Key Points:**  
-            - (Use bullet points for clarity, if needed)  
-            - (Highlight essential details in **bold**)  
-            - (Use `inline code` for specific terms if relevant)
+            1. **Reformulate the latest user question** into a self-contained query, incorporating details from chat history wherever they are necessary.
+            2. **Do not answer the question**, just reformulate it in a way that makes it clear and self-contained.
+            3. If the lastest user question is already clear and self-contained, **return it as is**.
 
             ### Chat History:
             {chat_history}
@@ -178,10 +186,6 @@ class RAGPipeline():
             {input}
 
             ### Reformulated Question:
-            (Rewrite the question if necessary, or return it as is.)
-
-            ### Follow-up Answer:
-            (Generate an answer that builds on past responses and available context.)
         """
 
         contextualize_system_prompt = ChatPromptTemplate.from_messages(
