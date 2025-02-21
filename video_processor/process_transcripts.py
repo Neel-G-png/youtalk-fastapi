@@ -76,7 +76,7 @@ class TranscripsFetcher():
                     'http': f'socks5h://{self.NORDVPN_USERNAME}:{self.NORDVPN_PASSWORD}@{server}',
                     'https': f'socks5h://{self.NORDVPN_USERNAME}:{self.NORDVPN_PASSWORD}@{server}'
                 }
-                transcript_list = YouTubeTranscriptApi.list_transcripts("wMVWSnS6CoY", proxies=nordvpn_proxy)
+                transcript_list = YouTubeTranscriptApi.list_transcripts(video_id, proxies=nordvpn_proxy)
                 transcript = transcript_list.find_transcript(self.language_codes)
                 if 'en' == transcript.language_code:
                     return transcript.fetch()

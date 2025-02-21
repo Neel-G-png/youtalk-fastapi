@@ -208,7 +208,7 @@ class RAGPipeline():
     async def generate(self, query, video_id):
         rag_chain = await self._build_rag_chain()
         context = self.retrive(query, video_id)
-        logger.info(f"User Query: {query} \t Video ID: {video_id}")
+        logger.info(f"User Query: {query} \n\n Video ID: {video_id}")
         async for event in rag_chain.astream_events({"question": query, "context": context}, version="v2"):
             kind = event["event"]
             if kind == "on_chat_model_stream":
