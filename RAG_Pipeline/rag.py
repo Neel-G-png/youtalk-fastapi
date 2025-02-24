@@ -140,7 +140,7 @@ class RAGPipeline():
             docs_to_ingest.append(doc)
             uuids_to_ingest.append(message_data['uuid'])
             uuid_ack[message_data['uuid']] = ack_id
-            print("UUID Processed - ", message_data['uuid'])
+            # print("UUID Processed - ", message_data['uuid'])
 
         logger.info("Ingesting into Pinecone!!")
         ingested_uuids = self.vector_store.add_documents(documents=docs_to_ingest, ids=uuids_to_ingest)
