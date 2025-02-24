@@ -3,12 +3,12 @@ import json
 import uuid
 import logging
 import asyncio
+import time
 from openai import OpenAI
 from dotenv import load_dotenv
 
 from pinecone import Pinecone
 from langchain_pinecone import PineconeVectorStore
-from langchain_openai import OpenAIEmbeddings
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -16,6 +16,8 @@ from langchain_openai import ChatOpenAI
 from langchain_core.output_parsers import StrOutputParser
 from langchain_mistralai import MistralAIEmbeddings
 from langchain_core.messages import HumanMessage, AIMessage
+import google.cloud.pubsub_v1 as pubsub
+from google.cloud import pubsub_v1
 
 load_dotenv()
 
@@ -29,6 +31,7 @@ PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 MISTRALAI_API_KEY = os.getenv("MISTRALAI_API_KEY")
 
+PROJECT_ID = os.getenv("PROJECT_ID")
 
 class RAGPipeline():
     def __init__(self, index_name = "youtube-chatbot", embeddings_preference = "mistral"):
@@ -40,20 +43,12 @@ class RAGPipeline():
         )
         self.output_parser = StrOutputParser()
 
-        # if embeddings_preference == "ollama":
-        #     self.embeddings = OllamaEmbeddings(
-        #         model="llama3"
-        #     )
         if embeddings_preference == "mistral":
             self.embeddings = MistralAIEmbeddings(
                 model="mistral-embed",
                 api_key=MISTRALAI_API_KEY,
             )
-        # elif embeddings_preference == "openai":
-        #     self.embeddings = OpenAIEmbeddings(
-        #         model="text-embedding-3-large", 
-        #         api_key=OPENAI_API_KEY
-        #     )
+
         else:
             raise ValueError("Invalid embeddings preference")
         
@@ -69,6 +64,8 @@ class RAGPipeline():
             search_type="similarity_score_threshold",
             search_kwargs={"k": 3, "score_threshold": 0.5},
         )
+        self.publisher = pubsub_v1.PublisherClient()
+        self.subscriber = pubsub_v1.SubscriberClient()
     
     def manually_refresh_connections(self):
         self.llm = ChatOpenAI(
@@ -93,7 +90,7 @@ class RAGPipeline():
     
     def _rechunk_transcripts(self, data, chunk_size=2000, chunk_overlap=500):
         """ Re Split the documents to have some overlap """
-
+        print("!!! Rechunking transcripts !!!")
         transript_documents = self._create_documents(data['user_id'], data['video_id'], data['transcripts'])
 
         r_splitter = RecursiveCharacterTextSplitter(
@@ -110,21 +107,106 @@ class RAGPipeline():
     def chunk_doc_list(self, docs, N):
         return [docs[i:i + N] for i in range(0, len(docs), N)]
 
-    async def add_documents_vdb(self, documents, uuids):
-        ingested_uuids = self.vector_store.add_documents(documents=documents, ids=uuids)
-        return ingested_uuids
+    def add_documents_vdb(self):
+        subscription_path = self.subscriber.subscription_path(PROJECT_ID, "youtalk-ingest-chunks-sub")
+        publishing_path = self.publisher.topic_path(PROJECT_ID, "youtalk-chunk-ack")
+
+        logger.info("Pulling messages from the queue!!")
+        response = self.subscriber.pull(
+            request={"subscription": subscription_path, "max_messages": 50}
+        )
+
+        uuids_to_ingest = []
+        docs_to_ingest = []
+        uuid_ack = {}
+
+        logger.info("Processing Messages!!")
+        for received_message in response.received_messages:
+            ack_id = received_message.ack_id
+            message_data = received_message.message.data.decode("utf-8")
+            message_data = json.loads(message_data)
+
+            doc = Document(
+                page_content= message_data['document']['page_content'],
+                metadata={
+                    "video_id": message_data['document']['metadata']['video_id'], 
+                    "user_id": message_data['document']['metadata']['user_id'], 
+                    "start": message_data['document']['metadata']['start'], 
+                    "end": message_data['document']['metadata']['end']
+                }
+            )
+
+            # doc = Document.from_dict(message_data['document'])
+            docs_to_ingest.append(doc)
+            uuids_to_ingest.append(message_data['uuid'])
+            uuid_ack[message_data['uuid']] = ack_id
+            print("UUID Processed - ", message_data['uuid'])
+
+        logger.info("Ingesting into Pinecone!!")
+        ingested_uuids = self.vector_store.add_documents(documents=docs_to_ingest, ids=uuids_to_ingest)
+
+        logger.info("Acknowledging Messages!!")
+        for uuid in ingested_uuids:
+            ack_message = {
+                "uuid": uuid,
+                "status": "ingested"
+            }
+
+            self.subscriber.acknowledge(
+                request={
+                    "subscription": subscription_path,
+                    "ack_ids": [uuid_ack[uuid]],
+                }
+            )
+
+            ack_message = json.dumps(ack_message)
+            ack_message = ack_message.encode("utf-8")
+            future = self.publisher.publish(publishing_path, ack_message)
+            future.result()
+
+    async def await_acknowledgment(self, uuids):
+        ack_sub_path = self.subscriber.subscription_path(PROJECT_ID, "youtalk-chunk-ack-sub")
+
+        received_uuids = []
+        logger.info("Waiting for acknowledgment of UUIDs")
+        def callback(message):
+            data = json.loads(message.data.decode("utf-8"))
+            logger.info("Received UUIDs: {}".format(data["uuid"]))
+            received_uuids.append(data["uuid"])
+            message.ack()
+
+        future = self.subscriber.subscribe(ack_sub_path, callback=callback)
+        
+        # Wait until all UUIDs are acknowledged
+        while not all(uuid in received_uuids for uuid in uuids):
+            await asyncio.sleep(0.1)
+
+        future.cancel()  # Stop the subscription when done
+        return received_uuids
 
     async def ingest_data(self, data):
         logger.info(f"ReChunking Transcripts - # of Transcripts: {len(data['transcripts'])}")
         documents = self._rechunk_transcripts(data)
-        logger.info(f"ReChunking Complete - # of Transcripts: {len(documents)}")
-
+        print(f"ReChunking Complete - # of Transcripts: {len(documents)}")
+        futures = []
+        topic_path = self.publisher.topic_path(PROJECT_ID, "youtalk-ingest-chunks")
         ingested_uuids = []
+
+        logger.info("Publishing documents to Pub/Sub")
         for docs in self.chunk_doc_list(documents, 50):
             uuids = self._generate_uuids(len(docs))
-            batch_uuids = await self.add_documents_vdb(docs, uuids)
-            ingested_uuids.extend(batch_uuids)
-            await asyncio.sleep(0.8)
+            for doc, uuid in zip(docs, uuids):
+                message_data = json.dumps({"uuid": uuid, "document": doc.dict()}).encode("utf-8")
+                future = self.publisher.publish(topic_path, message_data)
+                futures.append(future)
+
+        for future in futures:
+            future.result()
+
+        logger.info("Published all documents to Pub/Sub. Waiting for ack")
+        batch_uuids = await self.await_acknowledgment(uuids)
+        ingested_uuids.extend(batch_uuids)
+        logger.info("Ingested UUIDs:", ingested_uuids)
         return ingested_uuids
 
     def delete_records(self, uuids):
@@ -143,24 +225,6 @@ class RAGPipeline():
         Keep your answer ground in the facts of the CONTEXT.
         If the CONTEXT doesn’t contain the facts to answer the QUESTION return a message that the CONTEXT doesn’t have an exact answer but build an answer based on the provided CONTEXT and try to answer the QUESTION as best as you can.
         """
-
-        # template = """
-        #     Answer the user's question based **only** on the provided context. 
-        #     If the context does not contain enough information, Mention that the video context does not have an exact answer but build an answer based on the context below and try to answer the question as best as you can.
-
-        #     **Key Points:**  
-        #     - (Use bullet points for clarity, if needed)  
-        #     - (Highlight essential details in **bold**)  
-        #     - (Use `inline code` for specific terms if relevant)  
-
-        #     ### Context:
-        #     {context}
-
-        #     ### Question:
-        #     {question}
-
-        #     ### Answer:
-        # """
 
         prompt = ChatPromptTemplate.from_template(template)
         
